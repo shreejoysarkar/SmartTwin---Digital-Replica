@@ -19,6 +19,9 @@ with col1:
     def read_data():
         try:
             df = pd.read_csv(DATAFILE, parse_dates=["timestamp"])
+        except ValueError:
+            # Handle case where CSV is missing header
+            df = pd.read_csv(DATAFILE, header=None, names=["timestamp","rpm","vibration","temp","flow","fault"], parse_dates=["timestamp"])
         except:
             df = pd.DataFrame(columns=["timestamp","rpm","vibration","temp","flow","fault"])
         return df
@@ -36,11 +39,11 @@ with col2:
     if st.button("Inject vib spike"):
         row = {"timestamp": datetime.utcnow().isoformat(), "rpm":1500, "vibration":3.5, "temp":40, "flow":100, "fault":1}
         pd.DataFrame([row]).to_csv(DATAFILE, mode="a", header=False, index=False)
-        st.experimental_rerun()
+        st.rerun()
     if st.button("Inject low flow"):
         row = {"timestamp": datetime.utcnow().isoformat(), "rpm":1400, "vibration":0.7, "temp":36, "flow":60, "fault":2}
         pd.DataFrame([row]).to_csv(DATAFILE, mode="a", header=False, index=False)
-        st.experimental_rerun()
+        st.rerun()
     st.write("Export data:")
     try:
         with open(DATAFILE, "rb") as f:
@@ -50,16 +53,27 @@ with col2:
 
 st.subheader("Anomaly Detection")
 try:
-    model = joblib.load("if_model.pkl")
+    artifacts = joblib.load("if_model.pkl")
+    if isinstance(artifacts, dict):
+        scaler = artifacts.get("scaler")
+        model = artifacts.get("model")
+    else:
+        model = artifacts
+        scaler = None
 except:
     model = None
+    scaler = None
 
 if model is None:
     st.info("No trained model found. After collecting ~200 rows of normal data, run `python train_model.py`.")
 else:
     df = pd.read_csv(DATAFILE, parse_dates=["timestamp"])
-    X = df[["rpm","vibration","temp","flow"]].fillna(method="ffill").values
-    preds = model.predict(X)
+    X = df[["rpm","vibration","temp","flow"]].ffill().values
+    if scaler:
+        Xs = scaler.transform(X)
+    else:
+        Xs = X
+    preds = model.predict(Xs)
     df["anomaly"] = (preds == -1).astype(int)
     st.metric("Total anomalies", int(df["anomaly"].sum()))
     st.dataframe(df.tail(10)[["timestamp","rpm","vibration","temp","flow","anomaly"]].iloc[::-1])
